@@ -1,0 +1,75 @@
+[package]
+name = "sesame"
+version = "0.1.0"
+edition = "2024"
+# `std::fs::File::lock` (advisory file locking) was stabilised in 1.89.
+rust-version = "1.89"
+description = "A rootless, daemonless secret store: an encrypted-file alternative to KWallet and gnome-keyring"
+license = "Apache-2.0"
+readme = "README.md"
+keywords = ["secrets", "keyring", "wallet", "password", "encryption"]
+categories = ["command-line-utilities", "cryptography"]
+
+[lib]
+name = "sesame"
+path = "src/lib.rs"
+
+[[bin]]
+name = "sesame"
+path = "src/main.rs"
+required-features = ["cli"]
+
+[[test]]
+name = "cli"
+path = "tests/cli.rs"
+required-features = ["cli"]
+
+[features]
+default = ["cli"]
+# The command-line front end. Disable (`default-features = false`) to depend on
+# the library alone without pulling in clap and the terminal-handling crates.
+cli = ["dep:clap", "dep:rpassword"]
+
+[dependencies]
+# --- cryptography (all pure Rust: no C toolchain needed to cross-compile) ---
+argon2 = { version = "0.6.0", default-features = false, features = ["zeroize"] }
+chacha20poly1305 = { version = "0.11.0", default-features = false, features = ["zeroize"] }
+getrandom = "0.4.3"
+zeroize = "1.9.0"
+unicode-normalization = "0.1.25"
+
+# --- serialisation ---
+base64 = { version = "0.23.1", default-features = false, features = ["alloc"] }
+serde = { version = "1.0.229", features = ["derive"] }
+serde_json = "1.0.151"
+
+# --- platform paths ---
+dirs = "7.0.0"
+
+# --- CLI only ---
+clap = { version = "4.6.7", features = ["derive", "env"], optional = true }
+rpassword = { version = "7.5.4", optional = true }
+
+[target.'cfg(unix)'.dependencies]
+# Process hardening in the CLI (disable core dumps). Already in the dependency
+# graph via std/getrandom on every unix target.
+libc = "0.2"
+
+[dev-dependencies]
+tempfile = "3.27.0"
+
+# Argon2 is deliberately slow; unoptimised it is slower still, which makes the
+# test-suite crawl. Optimise just the crypto crates in dev/test builds.
+[profile.dev.package.argon2]
+opt-level = 3
+[profile.dev.package.blake2]
+opt-level = 3
+[profile.dev.package.chacha20]
+opt-level = 3
+[profile.dev.package.poly1305]
+opt-level = 3
+
+[profile.release]
+lto = true
+codegen-units = 1
+strip = true

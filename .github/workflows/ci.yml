@@ -1,0 +1,98 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
+env:
+  CARGO_TERM_COLOR: always
+  CARGO_INCREMENTAL: "0"
+
+jobs:
+  # The point of this job is that every supported platform builds and runs the
+  # whole test-suite *natively*, on real hardware of that architecture, rather
+  # than being cross-compiled and assumed to work.
+  test:
+    name: test (${{ matrix.target }})
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - { os: macos-15,         target: aarch64-apple-darwin }
+          - { os: ubuntu-latest,    target: x86_64-unknown-linux-gnu }
+          - { os: ubuntu-24.04-arm, target: aarch64-unknown-linux-gnu }
+          - { os: windows-latest,   target: x86_64-pc-windows-msvc }
+          - { os: windows-11-arm,   target: aarch64-pc-windows-msvc }
+    steps:
+      - uses: actions/checkout@v7
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: Swatinem/rust-cache@v2
+        with:
+          key: ${{ matrix.target }}
+
+      - name: Check the runner is the architecture we think it is
+        shell: bash
+        run: |
+          host="$(rustc -vV | sed -n 's/^host: //p')"
+          echo "rustc host: $host"
+          test "$host" = "${{ matrix.target }}"
+
+      - name: Test
+        run: cargo test --locked --all-targets
+      - name: Doc tests
+        run: cargo test --locked --doc
+      - name: Release build
+        run: cargo build --release --locked
+      - name: Smoke-test the release binary
+        shell: bash
+        run: |
+          set -eu
+          bin=target/release/sesame
+          [ -x "$bin.exe" ] && bin="$bin.exe"
+          "$bin" --version
+          # $RUNNER_TEMP is a native path on every OS (unlike an MSYS-style
+          # `mktemp -d` path, which a Windows .exe may not understand).
+          dir="$RUNNER_TEMP/sesame-smoke"
+          mkdir -p "$dir"
+          printf 'ci-password\n' > "$dir/pw"
+          export SESAME_DIR="$dir/wallets" SESAME_PASSWORD_FILE="$dir/pw"
+          "$bin" init
+          printf 'ci-secret' | "$bin" set service=ci
+          test "$("$bin" get service=ci)" = "ci-secret"
+
+  lint:
+    name: fmt + clippy (${{ matrix.os }})
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        # Each OS compiles different cfg() branches, so lint on all three.
+        os: [ubuntu-latest, macos-15, windows-latest]
+    steps:
+      - uses: actions/checkout@v7
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          components: clippy, rustfmt
+      - uses: Swatinem/rust-cache@v2
+      - run: cargo fmt --all --check
+      - run: cargo clippy --locked --all-targets --all-features -- -D warnings
+      - name: Clippy, library only
+        run: cargo clippy --locked --lib --no-default-features -- -D warnings
+
+  msrv:
+    name: minimum supported Rust (1.89)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+      - uses: dtolnay/rust-toolchain@1.89.0
+      - uses: Swatinem/rust-cache@v2
+      - run: cargo check --locked --all-targets
